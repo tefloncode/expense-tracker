@@ -1,4 +1,4 @@
-import OpenAI from 'openai'
+import OpenAI from 'openai';
 
 interface RawInsight {
   type?: string;
@@ -136,26 +136,41 @@ export async function generateExpenseInsights(
 }
 
 export async function categorizeExpense(description: string): Promise<string> {
+  async function withRetry<T>(fn: () => Promise<T>, retries = 3, delay = 2000): Promise<T> {
+    try {
+      return await fn();
+    } catch (error: any) {
+      // If we hit rate limit (429), retry with backoff
+      if (retries > 0 && error.status === 429) {
+        console.warn(`⚠️ Rate limit hit. Retrying in ${delay / 1000}s...`);
+        await new Promise((res) => setTimeout(res, delay));
+        return withRetry(fn, retries - 1, delay * 2);
+      }
+      throw error;
+    }
+  }
+
   try {
-    const completion = await openai.chat.completions.create({
-      model: 'deepseek/deepseek-chat-v3-0324:free',
-      messages: [
-        {
-          role: 'system',
-          content:
-            'You are an expense categorization AI. Categorize expenses into one of these categories: Food, Transportation, Entertainment, Shopping, Bills, Healthcare, Other. Respond with only the category name.',
-        },
-        {
-          role: 'user',
-          content: `Categorize this expense: "${description}"`,
-        },
-      ],
-      temperature: 0.1,
-      max_tokens: 20,
-    });
+    const completion = await withRetry(() =>
+      openai.chat.completions.create({
+        model: 'deepseek/deepseek-chat-v3-0324:free',
+        messages: [
+          {
+            role: 'system',
+            content:
+              'You are an expense categorization AI. Categorize expenses into one of these categories: Food, Transportation, Entertainment, Shopping, Bills, Healthcare, Other. Respond with only the category name.',
+          },
+          {
+            role: 'user',
+            content: `Categorize this expense: "${description}"`,
+          },
+        ],
+        temperature: 0.1,
+        max_tokens: 20,
+      })
+    );
 
     const category = completion.choices[0].message.content?.trim();
-
     const validCategories = [
       'Food',
       'Transportation',
@@ -166,10 +181,7 @@ export async function categorizeExpense(description: string): Promise<string> {
       'Other',
     ];
 
-    const finalCategory = validCategories.includes(category || '')
-      ? category!
-      : 'Other';
-    return finalCategory;
+    return validCategories.includes(category || '') ? category! : 'Other';
   } catch (error) {
     console.error('❌ Error categorizing expense:', error);
     return 'Other';
