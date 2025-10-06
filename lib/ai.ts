@@ -90,7 +90,7 @@ export async function generateExpenseInsights(
     }
 
     // Clean the response by removing markdown code blocks if present
-    let cleanedResponse = response.trim();
+   let cleanedResponse = response.trim();
     if (cleanedResponse.startsWith('```json')) {
       cleanedResponse = cleanedResponse
         .replace(/^```json\s*/, '')
@@ -117,7 +117,7 @@ export async function generateExpenseInsights(
     );
 
     return formattedInsights;
-  } catch (error) {
+  } catch (error: unknown) {
     console.error('❌ Error generating AI insights:', error);
 
     // Fallback to mock insights if AI fails
