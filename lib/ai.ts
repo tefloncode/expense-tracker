@@ -34,24 +34,11 @@ export interface AIInsight {
   confidence: number;
 }
 
-// ✅ Centralized retry logic for ALL AI functions
-async function withRetry<T>(fn: () => Promise<T>, retries = 3, delay = 2000): Promise<T> {
-  try {
-    return await fn();
-  } catch (error: any) {
-    if (retries > 0 && error.status === 429) {
-      console.warn(`⚠️ Rate limit hit. Retrying in ${delay / 1000}s...`);
-      await new Promise((res) => setTimeout(res, delay));
-      return withRetry(fn, retries - 1, delay * 2);
-    }
-    throw error;
-  }
-}
-
 export async function generateExpenseInsights(
   expenses: ExpenseRecord[]
 ): Promise<AIInsight[]> {
   try {
+    // Prepare expense data for AI analysis
     const expensesSummary = expenses.map((expense) => ({
       amount: expense.amount,
       category: expense.category,
@@ -80,44 +67,60 @@ export async function generateExpenseInsights(
 
     Return only valid JSON array, no additional text.`;
 
-    // ✅ Wrapped in retry logic to avoid 429 crash
-    const completion = await withRetry(() =>
-      openai.chat.completions.create({
-        model: 'deepseek/deepseek-chat-v3-0324:free',
-        messages: [
-          {
-            role: 'system',
-            content:
-              'You are a financial advisor AI that analyzes spending patterns and provides actionable insights. Always respond with valid JSON only.',
-          },
-          { role: 'user', content: prompt },
-        ],
-        temperature: 0.7,
-        max_tokens: 1000,
+    const completion = await openai.chat.completions.create({
+      model: 'deepseek/deepseek-chat-v3-0324:free',
+      messages: [
+        {
+          role: 'system',
+          content:
+            'You are a financial advisor AI that analyzes spending patterns and provides actionable insights. Always respond with valid JSON only.',
+        },
+        {
+          role: 'user',
+          content: prompt,
+        },
+      ],
+      temperature: 0.7,
+      max_tokens: 1000,
+    });
+
+    const response = completion.choices[0].message.content;
+    if (!response) {
+      throw new Error('No response from AI');
+    }
+
+    // Clean the response by removing markdown code blocks if present
+    let cleanedResponse = response.trim();
+    if (cleanedResponse.startsWith('```json')) {
+      cleanedResponse = cleanedResponse
+        .replace(/^```json\s*/, '')
+        .replace(/\s*```$/, '');
+    } else if (cleanedResponse.startsWith('```')) {
+      cleanedResponse = cleanedResponse
+        .replace(/^```\s*/, '')
+        .replace(/\s*```$/, '');
+    }
+
+    // Parse AI response
+    const insights = JSON.parse(cleanedResponse);
+
+    // Add IDs and ensure proper format
+    const formattedInsights = insights.map(
+      (insight: RawInsight, index: number) => ({
+        id: `ai-${Date.now()}-${index}`,
+        type: insight.type || 'info',
+        title: insight.title || 'AI Insight',
+        message: insight.message || 'Analysis complete',
+        action: insight.action,
+        confidence: insight.confidence || 0.8,
       })
     );
 
-    const response = completion.choices[0].message.content;
-    if (!response) throw new Error('No response from AI');
-
-    // Clean markdown if returned in code block
-    let cleanedResponse = response.trim()
-      .replace(/^```json\s*/i, '')
-      .replace(/^```\s*/i, '')
-      .replace(/\s*```$/, '');
-
-    const insights = JSON.parse(cleanedResponse);
-
-    return insights.map((insight: RawInsight, index: number) => ({
-      id: `ai-${Date.now()}-${index}`,
-      type: insight.type || 'info',
-      title: insight.title || 'AI Insight',
-      message: insight.message || 'Analysis complete',
-      action: insight.action,
-      confidence: insight.confidence || 0.8,
-    }));
+    return formattedInsights;
   } catch (error) {
     console.error('❌ Error generating AI insights:', error);
+
+    // Fallback to mock insights if AI fails
     return [
       {
         id: 'fallback-1',
@@ -134,23 +137,25 @@ export async function generateExpenseInsights(
 
 export async function categorizeExpense(description: string): Promise<string> {
   try {
-    const completion = await withRetry(() =>
-      openai.chat.completions.create({
-        model: 'deepseek/deepseek-chat-v3-0324:free',
-        messages: [
-          {
-            role: 'system',
-            content:
-              'You are an expense categorization AI. Categorize expenses into one of these categories: Food, Transportation, Entertainment, Shopping, Bills, Healthcare, Other. Respond with only the category name.',
-          },
-          { role: 'user', content: `Categorize this expense: "${description}"` },
-        ],
-        temperature: 0.1,
-        max_tokens: 20,
-      })
-    );
+    const completion = await openai.chat.completions.create({
+      model: 'deepseek/deepseek-chat-v3-0324:free',
+      messages: [
+        {
+          role: 'system',
+          content:
+            'You are an expense categorization AI. Categorize expenses into one of these categories: Food, Transportation, Entertainment, Shopping, Bills, Healthcare, Other. Respond with only the category name.',
+        },
+        {
+          role: 'user',
+          content: `Categorize this expense: "${description}"`,
+        },
+      ],
+      temperature: 0.1,
+      max_tokens: 20,
+    });
 
     const category = completion.choices[0].message.content?.trim();
+
     const validCategories = [
       'Food',
       'Transportation',
@@ -161,7 +166,10 @@ export async function categorizeExpense(description: string): Promise<string> {
       'Other',
     ];
 
-    return validCategories.includes(category || '') ? category! : 'Other';
+    const finalCategory = validCategories.includes(category || '')
+      ? category!
+      : 'Other';
+    return finalCategory;
   } catch (error) {
     console.error('❌ Error categorizing expense:', error);
     return 'Other';
@@ -193,25 +201,27 @@ export async function generateAIAnswer(
     
     Return only the answer text, no additional formatting.`;
 
-    // ✅ Add retry logic here too
-    const completion = await withRetry(() =>
-      openai.chat.completions.create({
-        model: 'deepseek/deepseek-chat-v3-0324:free',
-        messages: [
-          {
-            role: 'system',
-            content:
-              'You are a helpful financial advisor AI that provides specific, actionable answers based on expense data. Be concise but thorough.',
-          },
-          { role: 'user', content: prompt },
-        ],
-        temperature: 0.7,
-        max_tokens: 200,
-      })
-    );
+    const completion = await openai.chat.completions.create({
+      model: 'deepseek/deepseek-chat-v3-0324:free',
+      messages: [
+        {
+          role: 'system',
+          content:
+            'You are a helpful financial advisor AI that provides specific, actionable answers based on expense data. Be concise but thorough.',
+        },
+        {
+          role: 'user',
+          content: prompt,
+        },
+      ],
+      temperature: 0.7,
+      max_tokens: 200,
+    });
 
     const response = completion.choices[0].message.content;
-    if (!response) throw new Error('No response from AI');
+    if (!response) {
+      throw new Error('No response from AI');
+    }
 
     return response.trim();
   } catch (error) {
